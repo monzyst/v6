@@ -1,0 +1,39 @@
+# ---- dependencies ----
+node_modules/
+.pnp/
+.pnp.js
+
+# ---- build output ----
+dist/
+build/
+cache/
+artifacts/
+out/
+typechain/
+typechain-types/
+*.tsbuildinfo
+
+# ---- environment / secrets ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+keystore/
+*.keystore
+keypair*.json
+id.json
+
+# ---- logs / coverage ----
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+coverage/
+.nyc_output/
+
+# ---- editor / OS ----
+.DS_Store
+.idea/
+.vscode/
+*.swp
