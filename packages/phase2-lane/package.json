@@ -1,0 +1,8 @@
+{
+  "name": "@v6hf/phase2-lane",
+  "version": "6.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts"
+}
