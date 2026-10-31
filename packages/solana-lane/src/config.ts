@@ -54,7 +54,12 @@ export const SolanaLaneConfigSchema = z.object({
 
   // ---- operational ----
   intentTtlSeconds: z.number().int().positive().default(10),
-  dryRun: z.boolean().default(false),
+  /**
+   * SAFE BY DEFAULT. `false` means LIVE. Jupiter Lend charges no flash fee, which
+   * makes an accidental live run *quieter* than on Base, not safer — the only
+   * barrier is this flag, so it must default to the non-broadcasting side.
+   */
+  dryRun: z.boolean().default(true),
 });
 
 export type SolanaLaneConfig = z.infer<typeof SolanaLaneConfigSchema>;

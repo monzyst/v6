@@ -1,5 +1,5 @@
 import { AccountingError, ceilDiv } from "./units.js";
-import type { Raw, Wei } from "./types.js";
+import { BPS_DENOMINATOR, type Raw, type Wei } from "./types.js";
 import type { Phase2Economics, Phase2Plan, Phase2Step, P2Leg, SignedRaw } from "./phase2-types.js";
 
 /**
@@ -20,10 +20,10 @@ import type { Phase2Economics, Phase2Plan, Phase2Step, P2Leg, SignedRaw } from "
  * -------------------------------------------------------------------------
  * THE IDENTITIES
  * -------------------------------------------------------------------------
- *   (1) carry     = R - B0 - D                    signed
- *   (2) carryNet  = carry - C                     signed
- *   (3) gate      = carryNet >= F                 off-chain submission gate
- *   (4) invariant = carry    >= F                 on-chain assertion
+ *   (1) carry     = R - B0                         signed, step-independent
+ *   (2) carryNet  = carry - C                      signed
+ *   (3) gate      = carryNet >= F                  off-chain submission gate
+ *   (4) invariant = carry    >= F                  on-chain assertion
  *
  * -------------------------------------------------------------------------
  * WHY SIGNED, AND WHY (3) IS STRICTER THAN (4)
@@ -34,9 +34,9 @@ import type { Phase2Economics, Phase2Plan, Phase2Step, P2Leg, SignedRaw } from "
  * point of an emergency exit. Hence `F` is `int256` and `carry` is signed.
  *
  * With `F >= 0` the two forms are algebraically identical:
- *     carry >= F   <=>   R - B0 - D >= F   <=>   R >= B0 + D + F
- * which is exactly Phase 1's invariant with `D` in place of `L + F` and `F` in
- * place of `P`. The signed form is a strict generalisation, not a different rule.
+ *     carry >= F   <=>   R - B0 >= F   <=>   R >= B0 + F
+ * which is exactly Phase 1's invariant with `F` in place of `P`. The signed form
+ * is a strict generalisation, not a different rule.
  *
  * (3) is strictly stronger than (4) because it also charges the declared cost
  * ceiling `C`. A marginal position can satisfy the on-chain invariant and still
@@ -82,6 +82,27 @@ export interface Phase2ChainSnapshot {
  * quoted output is not a plan that passes on-chain.
  *
  * Throws `AccountingError` if a leg over-spends its input token or sizes to zero.
+ *
+ * LEG SIZING. A leg may be sized two ways, mirroring `IV6HFExecutor.Leg`:
+ *   amountIn >  0  -> spend exactly `amountIn`
+ *   amountIn == 0  -> spend floor(balanceOf(tokenIn) * amountInBps / 1e4)
+ *
+ * The bps form is what makes a CHAINED plan expressible. Legs run sequentially
+ * against the SAME balance sheet, so a leg may legitimately consume the output
+ * the previous leg produced. Without it, each leg of an N-leg plan would have to
+ * declare the full notional and the projection would reject the plan as
+ * over-spending — which is exactly the bug this replaces.
+ *
+ * TOKENS. `tokenIn` and `tokenOut` may differ (the normal case: USDC -> LST ->
+ * USDC). `extraBalances` seeds the starting balance of any non-accounting token the
+ * chain touches; without it a leg selling the counter-asset would see a zero
+ * balance. `Phase2Executor._executeLeg` rejects `tokenIn == tokenOut`, so a
+ * same-token leg is a hard error here too rather than a silently different meaning
+ * for `minAmountOut`.
+ *
+ * Resizing is BOUNDED, never invented: if `amountInBps` yields zero the leg is
+ * rejected, and if the resolved amount exceeds the balance the leg is rejected.
+ * A plan is never silently clamped into solvency.
  */
 export function projectPhase2PostBalance(
   plan: Phase2Plan,
@@ -107,18 +128,37 @@ export function projectPhase2PostBalance(
     if (!leg) throw new AccountingError(`projectPhase2PostBalance: missing leg ${i}`, { leg: String(i) });
 
     const available = get(leg.tokenIn);
-    if (leg.amountIn === 0n) {
+
+    // Mirror `Phase2Executor._executeLeg`: a same-token leg is rejected, because
+    // `minAmountOut` would measure the NET delta rather than gross output.
+    if (leg.tokenIn.toLowerCase() === leg.tokenOut.toLowerCase()) {
+      throw new AccountingError(`projectPhase2PostBalance: leg ${i} aliases tokenIn and tokenOut`, {
+        leg: String(i),
+      });
+    }
+
+    // Resolve the spend amount EXACTLY as `Phase2Executor._executeLeg` does:
+    // a non-zero `amountIn` wins and `amountInBps` is ignored. Rejecting the pair
+    // here would make the off-chain projection stricter than the contract, which
+    // is a divergence bug in its own right — the projection must model the chain,
+    // not a tidier variant of it.
+    const amountIn: Raw =
+      leg.amountIn > 0n
+        ? leg.amountIn
+        : (available * leg.amountInBps) / BPS_DENOMINATOR;
+
+    if (amountIn === 0n) {
       throw new AccountingError(`projectPhase2PostBalance: leg ${i} sizes to zero`, { leg: String(i) });
     }
-    if (leg.amountIn > available) {
+    if (amountIn > available) {
       throw new AccountingError(`projectPhase2PostBalance: leg ${i} over-spends tokenIn`, {
         leg: String(i),
-        amountIn: leg.amountIn.toString(),
+        amountIn: amountIn.toString(),
         available: available.toString(),
       });
     }
 
-    set(leg.tokenIn, available - leg.amountIn);
+    set(leg.tokenIn, available - amountIn);
     set(leg.tokenOut, get(leg.tokenOut) + leg.minAmountOut);
   }
 

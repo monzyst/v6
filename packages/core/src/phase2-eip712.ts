@@ -1,6 +1,7 @@
 import { TypedDataEncoder, keccak256, toUtf8Bytes, getAddress, type TypedDataField } from "ethers";
 import type { Phase2Plan, P2Leg } from "./phase2-types.js";
 import { PHASE2_ACTION } from "./phase2-types.js";
+import type { Raw } from "./types.js";
 
 /**
  * EIP-712 encoding for the Phase 2 `Phase2Plan`.
@@ -18,7 +19,7 @@ import { PHASE2_ACTION } from "./phase2-types.js";
 
 export const P2_LEG_TYPE_STRING =
   "P2Leg(address venue,address tokenIn,address tokenOut,uint256 amountIn," +
-  "uint256 minAmountOut,uint8 action,uint256 deadline)";
+  "uint256 amountInBps,uint256 minAmountOut,uint8 action,uint256 deadline)";
 
 export const PHASE2_PLAN_TYPE_STRING =
   "Phase2Plan(uint8 strategy,address asset,uint256 deployedRaw,int256 minCarryRaw," +
@@ -34,6 +35,7 @@ export const P2_TYPES: Record<string, TypedDataField[]> = {
     { name: "tokenIn", type: "address" },
     { name: "tokenOut", type: "address" },
     { name: "amountIn", type: "uint256" },
+    { name: "amountInBps", type: "uint256" },
     { name: "minAmountOut", type: "uint256" },
     { name: "action", type: "uint8" },
     { name: "deadline", type: "uint256" },
@@ -83,6 +85,7 @@ export function hashP2Legs(legs: readonly P2Leg[]): string {
       tokenIn: getAddress(leg.tokenIn),
       tokenOut: getAddress(leg.tokenOut),
       amountIn: leg.amountIn,
+      amountInBps: leg.amountInBps,
       minAmountOut: leg.minAmountOut,
       action: BigInt(leg.action),
       deadline: leg.deadline,
@@ -157,7 +160,7 @@ export function buildPhase2Plan(input: {
   nonce: bigint;
   deadline: bigint;
   profitRecipient: string;
-  legs: ReadonlyArray<Omit<P2Leg, "action">>;
+  legs: ReadonlyArray<Omit<P2Leg, "action" | "amountInBps"> & { amountInBps?: Raw }>;
   step: "open" | "hedge" | "close";
 }): Phase2Plan {
   const action = PHASE2_ACTION[input.step];
@@ -171,6 +174,10 @@ export function buildPhase2Plan(input: {
     nonce: input.nonce,
     deadline: input.deadline,
     profitRecipient: input.profitRecipient,
-    legs: input.legs.map((l) => ({ ...l, action })),
+    // `amountInBps` defaults to 0, i.e. the leg spends its absolute `amountIn`.
+    // Defaulting here (rather than at every call site) keeps the absolute form
+    // terse, and the bps form is opt-in by construction: a leg that leaves
+    // `amountInBps` unset can never silently start sizing off the balance.
+    legs: input.legs.map((l) => ({ amountInBps: 0n, ...l, action })),
   };
 }
