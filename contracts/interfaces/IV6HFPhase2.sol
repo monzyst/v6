@@ -32,21 +32,34 @@ library Phase2Actions {
 ///             close (P2_POSITION_OPEN|P2_HEDGING -> P2_CLOSING -> P2_IDLE)
 ///         Each step is its own signed `Phase2Plan`. Capital is deployed rather than
 ///         borrowed, so the invariant is a SIGNED carry:
-///             carry = R - B0 - D          (int256, may be negative)
+///             carry = R - B0              (int256, may be negative)
 ///             require(carry >= plan.minCarryRaw)
 ///         With `minCarryRaw >= 0` this is algebraically identical to the Phase 1
-///         invariant `R >= B0 + D + P`. Allowing `minCarryRaw < 0` is what makes a
+///         invariant `R >= B0 + P`. Allowing `minCarryRaw < 0` is what makes a
 ///         bounded-loss emergency exit expressible — a Phase 1 plan can never
 ///         authorise a loss, and that is precisely why Phase 2 needs its own type.
 interface IV6HFPhase2 {
     /// @notice One Phase 2 leg. Every leg is a `venue` call that moves `tokenIn`
     ///         into the venue and expects `tokenOut` back.
     /// @dev    `action` must equal the entry point's action; see `Phase2Actions`.
+    ///
+    ///         `amountIn == 0` means "spend a bps share of the CURRENT balance of
+    ///         tokenIn", exactly as `IV6HFExecutor.Leg` does on the Phase 1 lane.
+    ///         `amountInBps == 10_000` therefore means "spend the whole balance".
+    ///
+    ///         THIS IS NOT COSMETIC. A chained strategy (buy spot, then hedge the
+    ///         position that purchase created) must fund leg N+1 from leg N's
+    ///         output. Expressing every leg as a fixed absolute `amountIn` would
+    ///         force the plan to spend the notional once per leg, so a two-leg plan
+    ///         would need twice the capital it declares in `deployedRaw` and the
+    ///         leg projection would reject it. The bps form makes a chain
+    ///         expressible without inventing a second notional.
     struct P2Leg {
         address venue;
         address tokenIn;
         address tokenOut;
         uint256 amountIn;
+        uint256 amountInBps;
         uint256 minAmountOut;
         uint8 action; // must equal the entry point's action
         uint256 deadline;

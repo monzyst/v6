@@ -92,35 +92,37 @@ library RawMath {
     // ---------------------------------------------------------------------
 
     /// @notice Phase 2 signed carry in accounting-asset raw units.
-    /// @dev    carry = R - B0 - D, evaluated in int256.
+    /// @dev    carry = R - B0, evaluated in int256.
+    ///
+    ///         WHY THERE IS NO `deployedRaw` PARAMETER
+    ///         -------------------------------------
+    ///         An earlier revision took `deployedRaw` and subtracted it. That was
+    ///         wrong: the executor holds a working FLOAT of the accounting asset
+    ///         between steps, so the principal `D` is already part of `B0`.
+    ///         Subtracting it double-counted the principal and made every plan
+    ///         evaluate as a loss. `D` is enforced separately and structurally —
+    ///         it must equal the principal recorded at open
+    ///         (`DeployedAmountMismatch`), and the leg pre-flight refuses a plan
+    ///         whose legs spend more than the float actually held.
     ///
     ///         Why signed: Phase 2 deploys capital into a position that is unwound
     ///         over several transactions, so a de-risking close can legitimately
     ///         realise a loss. Phase 1's unsigned `invariantHolds` cannot express
     ///         "lose at most X", which is exactly what an emergency exit needs.
     ///
-    ///         With `floor >= 0` the constraint `carry >= floor` is algebraically
-    ///         identical to Phase 1's `R >= B0 + D + floor`.
+    ///         With `floor >= 0` the constraint `carry >= floor` is exactly Phase 1's
+    ///         invariant `R >= B0 + P` with `P` in place of `floor`.
     ///
     ///         Overflow: `postBalance` and `preBalance` are uint256 balances. The
     ///         difference is computed after an explicit ordering test and widened to
     ///         int256, so no uint256->int256 cast can truncate: both operands are
     ///         bounded by total token supply, far below 2^255.
-    function netCarryRaw(uint256 postBalance, uint256 preBalance, uint256 deployedRaw)
-        internal
-        pure
-        returns (int256)
-    {
-        // surplus = R - B0, as a signed value, without ever computing a negative uint.
-        int256 surplus;
+    function netCarryRaw(uint256 postBalance, uint256 preBalance) internal pure returns (int256) {
+        // R - B0 as a signed value, without ever computing a negative uint.
         if (postBalance >= preBalance) {
-            surplus = int256(postBalance - preBalance);
-        } else {
-            surplus = -int256(preBalance - postBalance);
+            return int256(postBalance - preBalance);
         }
-        // D is capped at supply, so the cast is safe; checked arithmetic below
-        // reverts (rather than wrapping) on any overflow.
-        return surplus - int256(deployedRaw);
+        return -int256(preBalance - postBalance);
     }
 
     /// @notice True iff the signed carry satisfies the plan's floor.

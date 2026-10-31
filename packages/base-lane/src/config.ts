@@ -14,7 +14,8 @@ const bigintStr = z.string().regex(/^\d+$/, "must be a non-negative integer stri
 
 export const BaseLaneConfigSchema = z.object({
   // ---- chain ----
-  chainId: z.literal(8453), // Base mainnet. 84532 for Sepolia in staging.
+  // 8453 = Base mainnet, 84532 = Base Sepolia (staging).
+  chainId: z.union([z.literal(8453), z.literal(84532)]),
   rpcUrl: z.string().url(),
   wsUrl: z.string().url().optional(),
 
@@ -59,7 +60,14 @@ export const BaseLaneConfigSchema = z.object({
   // ---- operational ----
   planTtlSeconds: z.number().int().positive().default(12),
   pollIntervalMs: z.number().int().positive().default(250),
-  dryRun: z.boolean().default(false),
+  /**
+   * SAFE BY DEFAULT. `false` means LIVE — it submits transactions that spend
+   * real money. A config that omits this field must never be able to trade, so
+   * the default is `true` and going live is an explicit, deliberate act.
+   *
+   * (An earlier revision defaulted to `false`, i.e. live — a silent money path.)
+   */
+  dryRun: z.boolean().default(true),
 });
 
 export type BaseLaneConfig = z.infer<typeof BaseLaneConfigSchema>;

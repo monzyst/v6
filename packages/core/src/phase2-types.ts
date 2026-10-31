@@ -35,9 +35,21 @@ export const PHASE2_ACTION: Readonly<Record<"open" | "hedge" | "close", number>>
 };
 
 /**
- * A Phase 2 lifecycle step. The step determines the carry formula:
- *   open / hedge : carry = R - B0        (D is converted into the position)
- *   close        : carry = R - B0 - D    (D is returned by the redemption)
+ * A Phase 2 lifecycle step.
+ *
+ * THE CARRY FORMULA IS STEP-INDEPENDENT: `carry = R - B0` for every step.
+ *
+ * `D` (deployedRaw) is a FLOAT SEGMENT, not a subtraction term. The executor
+ * holds a working float of the accounting asset between steps; `D` marks which
+ * segment of that float a step is allowed to touch. Because `D` is already part
+ * of `B0`:
+ *
+ *     carry = R - B0 - D     would double-count the principal
+ *     carry = R - B0         is the correct, step-independent identity
+ *
+ * `D` is enforced separately and structurally: it must equal the principal
+ * recorded at open (`DeployedAmountMismatch`) and the leg projection refuses any
+ * plan whose legs spend more than the float actually held.
  */
 export type Phase2Step = "open" | "hedge" | "close";
 
@@ -45,7 +57,18 @@ export interface P2Leg {
   venue: string;
   tokenIn: string;
   tokenOut: string;
+  /** Absolute input amount. `0` selects the `amountInBps` form (see below). */
   amountIn: Raw;
+  /**
+   * bps of the CURRENT balance of `tokenIn`, used when `amountIn === 0`.
+   * Mirrors `IV6HFExecutor.Leg.amountInBps` on the Phase 1 lane.
+   *
+   * This is what makes a CHAINED plan expressible: leg N+1 can consume exactly
+   * what leg N produced, without the plan having to declare a second notional.
+   * A fixed-absolute-amount encoding would force a two-leg plan to spend the
+   * notional twice, which the projection would then reject.
+   */
+  amountInBps: Raw;
   minAmountOut: Raw;
   action: number;
   deadline: bigint;
@@ -71,7 +94,7 @@ export interface Phase2Plan {
  * Result of the pure Phase 2 carry evaluation.
  *
  * The identities, in order:
- *   (1) carry      = R - B0 - D                       signed
+ *   (1) carry      = R - B0                           signed  (D is a float segment)
  *   (2) cost       = maxCostRaw (declared ceiling)    unsigned
  *   (3) carryNet   = carry - cost                     signed
  *   (4) gate       = carryNet >= minCarryRaw          signed comparison
@@ -89,7 +112,7 @@ export interface Phase2Economics {
   preBalance: Raw;
   /** R — executor balance of `asset` after the step's legs. */
   postBalance: Raw;
-  /** carry = R - B0 - D. Signed. */
+  /** carry = R - B0. Signed. `D` is a float segment, not a subtrahend. */
   carryRaw: SignedRaw;
   /** Declared cost ceiling. */
   costRaw: Raw;

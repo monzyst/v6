@@ -37,3 +37,6 @@ coverage/
 .idea/
 .vscode/
 *.swp
+
+# ---- scratch / probe scripts ----
+tmp/
