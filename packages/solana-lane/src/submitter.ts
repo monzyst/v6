@@ -51,13 +51,30 @@ export interface SolanaSubmitterDeps {
   readonly breaker: CircuitBreaker;
   readonly nowTs: () => bigint;
   readonly log: (event: string, data: Record<string, unknown>) => void;
+  /**
+   * Transaction builder. Defaults to the real `buildFlashloanTransaction`.
+   *
+   * This is an INJECTION SEAM, and it exists for two legitimate reasons:
+   *   1. The Jupiter SDK resolves real on-chain accounts (`flashloanAdmin`, the
+   *      liquidity reserve) before it can emit an instruction. There is no honest
+   *      way to unit-test the submitter's budget / breaker / intent logic against
+   *      a stub `Connection` without this seam — the alternative would be to fake
+   *      the SDK's account resolution, which would mean testing a fiction.
+   *   2. It is how the lane is exercised against a local validator or a devnet
+   *      cluster with a different builder.
+   *
+   * It does NOT weaken production behaviour: omitting it uses the real builder.
+   */
+  readonly buildTransaction?: typeof buildFlashloanTransaction;
 }
 
 export class SolanaLaneSubmitter {
   private readonly signers: SolanaSigners;
+  private readonly buildTx: typeof buildFlashloanTransaction;
 
   constructor(private readonly deps: SolanaSubmitterDeps) {
     this.signers = buildSolanaSigners(deps.cfg);
+    this.buildTx = deps.buildTransaction ?? buildFlashloanTransaction;
   }
 
   async submit(
@@ -169,7 +186,7 @@ export class SolanaLaneSubmitter {
       }
 
       // ---- 6. Build the atomic transaction ----
-      const built = await buildFlashloanTransaction(
+      const built = await this.buildTx(
         cfg,
         this.signers,
         connection,

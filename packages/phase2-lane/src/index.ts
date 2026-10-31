@@ -1,4 +1,6 @@
 export * from "./config.js";
+export * from "./from-env.js";
+export * from "./market-from-env.js";
 export * from "./signers.js";
 export * from "./market.js";
 export * from "./strategy-base.js";
