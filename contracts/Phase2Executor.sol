@@ -44,7 +44,7 @@ import {IV6HFPhase2, Phase2Actions} from "./interfaces/IV6HFPhase2.sol";
 ///           └─ on revert: _trip(reason) PERSISTS, returns (false, 0)
 ///
 ///         CONSEQUENCE FOR INTEGRATORS: a non-reverting return with `success == false`
-///         means the step failed and the breaker is now open. `packages/phase2/src/
+///         means the step failed and the breaker is now open. `packages/phase2-lane/src/
 ///         submitter.ts` checks this bool explicitly.
 contract Phase2Executor is V6HFAccess, IV6HFPhase2 {
     using PhaseMachine for PhaseMachine.State;
@@ -55,7 +55,7 @@ contract Phase2Executor is V6HFAccess, IV6HFPhase2 {
 
     bytes32 public constant P2_LEG_TYPEHASH = keccak256(
         "P2Leg(address venue,address tokenIn,address tokenOut,uint256 amountIn,"
-        "uint256 minAmountOut,uint8 action,uint256 deadline)"
+        "uint256 amountInBps,uint256 minAmountOut,uint8 action,uint256 deadline)"
     );
 
     bytes32 public constant PHASE2_PLAN_TYPEHASH = keccak256(
@@ -143,17 +143,6 @@ contract Phase2Executor is V6HFAccess, IV6HFPhase2 {
         bool open;
     }
     Position public position;
-
-    /// @dev Transient context, reset at the start of every step.
-    bytes32 private _activePlanHash;
-    uint8 private _activeAction;
-    uint256 private _activePreBalance;
-    uint256 private _activeDeployedRaw;
-    int256 private _activeCarryFloor;
-    uint8 private _activeStrategy;
-    address private _activeAsset;
-    address private _activeProfitRecipient;
-    uint256 private _activeMaxCost;
 
     // ---------------------------------------------------------------------
     // Events
@@ -308,6 +297,7 @@ contract Phase2Executor is V6HFAccess, IV6HFPhase2 {
                     legs[i].tokenIn,
                     legs[i].tokenOut,
                     legs[i].amountIn,
+                    legs[i].amountInBps,
                     legs[i].minAmountOut,
                     legs[i].action,
                     legs[i].deadline
@@ -318,16 +308,16 @@ contract Phase2Executor is V6HFAccess, IV6HFPhase2 {
     }
 
     /// @notice Off-chain mirror of the signed carry invariant. Pure.
-    function previewCarry(uint256 postBalance, uint256 preBalance, uint256 deployedRaw)
+    /// @dev    `floorRaw` is the plan's own `minCarryRaw`, so the caller can ask the
+    ///         exact question the contract will ask. Reporting a bare `carry >= 0`
+    ///         would silently ignore a negative (bounded-loss) floor.
+    function previewCarry(uint256 postBalance, uint256 preBalance, int256 floorRaw)
         external
         pure
-        returns (int256 carryRaw, bool invariantHolds, uint256 requiredMin)
+        returns (int256 carryRaw, bool invariantHolds)
     {
-        carryRaw = RawMath.netCarryRaw(postBalance, preBalance, deployedRaw);
-        // The invariant is evaluated against the plan's own floor, which the caller
-        // supplies via `minCarryRaw`; here we report the break-even threshold.
-        invariantHolds = carryRaw >= 0;
-        requiredMin = preBalance + deployedRaw;
+        carryRaw = RawMath.netCarryRaw(postBalance, preBalance);
+        invariantHolds = RawMath.carryMeetsFloor(carryRaw, floorRaw);
     }
 
     // ---------------------------------------------------------------------
@@ -480,15 +470,6 @@ contract Phase2Executor is V6HFAccess, IV6HFPhase2 {
         }
 
         uint256 preBalance = IERC20(plan.asset).balanceOf(address(this));
-        _activePlanHash = planHash;
-        _activeAction = action;
-        _activePreBalance = preBalance;
-        _activeDeployedRaw = plan.deployedRaw;
-        _activeCarryFloor = plan.minCarryRaw;
-        _activeStrategy = plan.strategy;
-        _activeAsset = plan.asset;
-        _activeProfitRecipient = plan.profitRecipient;
-        _activeMaxCost = plan.maxCostRaw;
 
         // Every leg must agree with the step being executed.
         for (uint256 i = 0; i < plan.legs.length; ++i) {
@@ -535,7 +516,7 @@ contract Phase2Executor is V6HFAccess, IV6HFPhase2 {
         // accounting asset before returning, so that this balance assertion is
         // meaningful. That is the adapter's job, not the executor's.
         uint256 postBalance = IERC20(plan.asset).balanceOf(address(this));
-        int256 carry = RawMath.netCarryRaw(postBalance, preBalance, 0);
+        int256 carry = RawMath.netCarryRaw(postBalance, preBalance);
         if (carry < plan.minCarryRaw) {
             revert Errors.CarryBelowFloor(carry, plan.minCarryRaw);
         }
@@ -586,9 +567,36 @@ contract Phase2Executor is V6HFAccess, IV6HFPhase2 {
 
     function _executeLeg(P2Leg calldata leg, uint256 index) internal {
         if (block.timestamp > leg.deadline) revert Errors.LegExpired(index);
-        if (leg.amountIn == 0) revert Errors.SwapFailed(index);
 
-        _forceApprove(leg.tokenIn, leg.venue, leg.amountIn);
+        // A leg must MOVE value between two different tokens.
+        //
+        // WHY THIS IS REJECTED RATHER THAN SUPPORTED
+        // ------------------------------------------
+        // `minAmountOut` is checked against the leg's NET balance delta of
+        // `tokenOut` (`received` below). When `tokenIn == tokenOut` that delta is
+        // the leg's PROFIT, not its gross output: spending D and receiving D+gross
+        // nets to `gross`. So `minAmountOut` would silently change meaning between
+        // "gross output" (distinct tokens) and "net gain" (same token) — the same
+        // field, two semantics, decided by data. A plan that assumed gross would
+        // revert on a technicality, and a plan that assumed net would under-check
+        // its own slippage. Rejecting the aliased case removes the ambiguity
+        // instead of documenting it away.
+        //
+        // Real Phase 2 venues are token-to-token by construction: USDC -> LST,
+        // LST -> USDC, collateral -> receipt. A same-token "leg" is not a venue
+        // call, so there is nothing legitimate to support here.
+        if (leg.tokenIn == leg.tokenOut) revert Errors.SwapFailed(index);
+
+        // amountIn == 0 selects the bps-of-current-balance form (see P2Leg).
+        // This is what lets a chained plan fund leg N+1 from leg N's output
+        // without declaring a second notional.
+        uint256 amountIn = leg.amountIn;
+        if (amountIn == 0) {
+            amountIn = RawMath.bps(IERC20(leg.tokenIn).balanceOf(address(this)), leg.amountInBps);
+        }
+        if (amountIn == 0) revert Errors.SwapFailed(index);
+
+        _forceApprove(leg.tokenIn, leg.venue, amountIn);
         uint256 before = IERC20(leg.tokenOut).balanceOf(address(this));
 
         // A venue is an adapter implementing the same exact-input signature as V2.
@@ -597,7 +605,7 @@ contract Phase2Executor is V6HFAccess, IV6HFPhase2 {
                 "executeLeg(address,address,uint256,uint256)",
                 leg.tokenIn,
                 leg.tokenOut,
-                leg.amountIn,
+                amountIn,
                 leg.minAmountOut
             )
         );
