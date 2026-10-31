@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@v6hf/core": ["packages/core/src/index.ts"],
+      "@v6hf/base-lane": ["packages/base-lane/src/index.ts"],
+      "@v6hf/solana-lane": ["packages/solana-lane/src/index.ts"],
+      "@v6hf/phase2": ["packages/phase2/src/index.ts"],
+      "@v6hf/phase2-lane": ["packages/phase2-lane/src/index.ts"]
+    }
+  },
+  "include": ["packages/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
