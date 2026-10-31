@@ -1,0 +1,34 @@
+{
+  "name": "v6-hf",
+  "version": "6.0.0",
+  "private": true,
+  "type": "module",
+  "description": "V6-HF (High-Frequency Unrestricted) — Phase 1 live trading lanes",
+  "scripts": {
+    "build:contracts": "node scripts/compile.cjs",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "npm run build:contracts && npm run build:ts",
+    "test": "npm run build && node scripts/run-tests.cjs",
+    "test:phase1": "npm run build && node scripts/run-tests.cjs accounting eip712_parity e2e_cycle invariants",
+    "test:phase2": "npm run build && node scripts/run-tests.cjs phase2_strategies phase2_contracts phase_separation",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@ethereumjs/common": "^4.4.0",
+    "@ethereumjs/statemanager": "^2.4.0",
+    "@ethereumjs/tx": "^5.4.0",
+    "@ethereumjs/util": "^9.1.0",
+    "@ethereumjs/vm": "^8.1.1",
+    "@jup-ag/lend": "^0.1.0",
+    "@solana/web3.js": "^1.98.0",
+    "bn.js": "^5.2.1",
+    "ethers": "^6.13.0",
+    "solc": "0.8.24",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.2.0",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}
